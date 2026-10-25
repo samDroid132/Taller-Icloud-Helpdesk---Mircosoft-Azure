@@ -64,7 +64,91 @@
                                 Usuario: $nombre | Categoría: $categoria
                               </div>";
                     }
+                    
                     ?>
+
+                    <?php
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $nombre = htmlspecialchars($_POST['nombre']);
+    $categoria = htmlspecialchars($_POST['categoria']);
+    $descripcion = htmlspecialchars($_POST['descripcion']);
+    
+    $mensajeEstado = "";
+
+    // Comprobar si se ha subido un archivo correctamente
+    if (isset($_FILES['captura']) && $_FILES['captura']['error'] === UPLOAD_ERR_OK) {
+        $fileTmpPath = $_FILES['captura']['tmp_name'];
+        $fileName = uniqid() . '_' . basename($_FILES['captura']['name']);
+        
+        // Leer la cadena de conexión desde las variables de entorno de Azure
+        $connectionString = getenv('AZURE_STORAGE_CONNECTION_STRING');
+        $containerName = 'adjuntos-tickets';
+
+        if ($connectionString) {
+            // Lógica para conectar y subir a Azure Blob Storage mediante su API REST nativa en PHP
+            // Parsear la cadena de conexión
+            $parsedConn = [];
+            foreach (explode(';', $connectionString) as $pair) {
+                if (strpos($pair, '=') !== false) {
+                    list($k, $v) = explode('=', $pair, 2);
+                    $parsedConn[$k] = $v;
+                }
+            }
+
+            $accountName = $parsedConn['AccountName'];
+            $accountKey = $parsedConn['AccountKey'];
+            $fileContents = file_get_contents($fileTmpPath);
+            
+            // Construir petición REST segura hacia Azure Blob Storage
+            $date = gmdate('D, d M Y H:i:s T');
+            $version = '2020-10-02';
+            $canonicalizedResource = "/$accountName/$containerName/$fileName";
+            
+            $headers = [
+                "x-ms-blob-type: BlockBlob",
+                "x-ms-date: $date",
+                "x-ms-version: $version",
+                "Content-Length: " . strlen($fileContents)
+            ];
+
+            // URL del blob en Azure
+            $url = "https://$accountName.blob.core.windows.net/$containerName/$fileName";
+
+            $stringToSign = "PUT\n\n\n" . strlen($fileContents) . "\n\n" . "application/octet-stream\n\n\n\n\n\n\n" . 
+                            "x-ms-blob-type:BlockBlob\nx-ms-date:$date\nx-ms-version:$version\n$canonicalizedResource";
+
+            $signature = base64_encode(hash_hmac('sha256', $stringToSign, base64_decode($accountKey), true));
+            $authHeader = "SharedKey $accountName:$signature";
+            $headers[] = "Authorization: $authHeader";
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $fileContents);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode === 201) {
+                $mensajeEstado = "¡Ticket y captura subidos con éxito a Azure Blob Storage!";
+            } else {
+                $mensajeEstado = "Ticket registrado, pero hubo un fallo al subir la imagen a la nube.";
+            }
+        } else {
+            $mensajeEstado = "Ticket registrado localmente (Falta configurar la cadena de conexión en Azure).";
+        }
+    } else {
+        $mensajeEstado = "¡Ticket recibido correctamente sin archivos adjuntos!";
+    }
+
+    echo "<div class='alert alert-success mt-4'>
+            <strong>$mensajeEstado</strong><br>
+            Usuario: $nombre | Categoría: $categoria
+          </div>";
+}
+?>
                 </div>
             </div>
         </div>
